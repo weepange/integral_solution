@@ -1,25 +1,26 @@
 import unittest
 
 from integral_solver import explain_solution, solve_definite, solve_indefinite
+from integral_solver.core.ast import format_expr
 
 
 class IntegralSolverTests(unittest.TestCase):
     def test_polynomial(self) -> None:
         result = solve_indefinite("x^2 + 2*x + 1")
         self.assertTrue(result["ok"])
-        text = explain_solution(result)
+        text = format_expr(result["result"])
         self.assertIn("x^(3)", text)
 
     def test_trig(self) -> None:
         result = solve_indefinite("sin(x)")
         self.assertTrue(result["ok"])
-        text = explain_solution(result)
+        text = format_expr(result["result"])
         self.assertIn("cos(x)", text)
 
     def test_exponential(self) -> None:
         result = solve_indefinite("exp(3*x)")
         self.assertTrue(result["ok"])
-        text = explain_solution(result)
+        text = format_expr(result["result"])
         self.assertIn("exp(3*x)", text)
 
     def test_definite(self) -> None:
@@ -30,13 +31,13 @@ class IntegralSolverTests(unittest.TestCase):
     def test_log(self) -> None:
         result = solve_indefinite("log(x)")
         self.assertTrue(result["ok"])
-        text = explain_solution(result)
-        self.assertIn("log(|x|)", text)
+        text = format_expr(result["result"])
+        self.assertIn("ln(|x|)", text)
 
     def test_by_parts(self) -> None:
         result = solve_indefinite("x*sin(x)")
         self.assertTrue(result["ok"])
-        text = explain_solution(result)
+        text = format_expr(result["result"])
         self.assertIn("cos(x)", text)
         self.assertIn("sin(x)", text)
 
@@ -102,15 +103,15 @@ class IntegralSolverTests(unittest.TestCase):
     def test_trig_powers(self) -> None:
         result = solve_indefinite("sin(x)^3 * cos(x)^2")
         self.assertTrue(result.get("ok", False))
-        text = explain_solution(result)
+        text = format_expr(result["result"])
         self.assertIn("cos(x)^(3)", text)
         self.assertIn("cos(x)^(5)", text)
 
     def test_complex_rational_function(self) -> None:
         result = solve_indefinite("(4*x^2 + 5*x + 1)/(x^3 - 1)")
         self.assertTrue(result.get("ok", False))
-        text = explain_solution(result)
-        self.assertIn("log", text)
+        text = format_expr(result["result"])
+        self.assertIn("ln", text)
         self.assertIn("atan", text)
 
 if __name__ == "__main__":

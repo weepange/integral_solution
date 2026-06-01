@@ -75,17 +75,27 @@ def explain_line_solution(result: dict[str, object]) -> str:
     return "\n".join(lines)
 
 def explain_solution(result: dict[str, object], definite: bool = False) -> str:
+    from integral_solver.core.printer import pretty_print
     if not result.get("ok"):
         return str(result.get("error", "Ошибка"))
     lines = []
     if result.get("notes"):
         lines.append("Метод: " + "; ".join(dict.fromkeys(result["notes"])))  # type: ignore[index]
-    lines.append("Интеграл: " + format_expr(result["expression"]))  # type: ignore[index]
+    
+    expr_blk = pretty_print(result["expression"])  # type: ignore[arg-type]
+    lines.append("Интеграл:\n" + "\n".join("  " + l for l in expr_blk.lines))
+    
     if definite:
-        lines.append("Первообразная: " + format_expr(result["result"]))  # type: ignore[index]
+        res_blk = pretty_print(result["result"])  # type: ignore[arg-type]
+        lines.append("Первообразная:\n" + "\n".join("  " + l for l in res_blk.lines))
         lines.append("Значение на [a, b]: " + format_float(result["value"]))  # type: ignore[index]
     else:
-        lines.append("Ответ: " + format_expr(result["result"]) + " + C")  # type: ignore[index]
+        res_blk = pretty_print(result["result"])  # type: ignore[arg-type]
+        # Append "+ C"
+        from integral_solver.core.printer import hstack, Block
+        res_blk = hstack(res_blk, Block.text(" + C"))
+        lines.append("Ответ:\n" + "\n".join("  " + l for l in res_blk.lines))
+        
     return "\n".join(lines)
 
 class _C:
@@ -330,11 +340,17 @@ def interactive_cli() -> None:
                 with _Spinner("Вычисляю первообразную…"):
                     result = solve_indefinite(raw, var)
                 if result.get("ok"):
-                    _print_result([
-                        f"∫ {format_expr(result['expression'])} d{var}",
-                        "",
-                        f"= {format_expr(result['result'])} + C",
-                    ])
+                    from integral_solver.core.printer import pretty_print, hstack, Block
+                    expr_blk = pretty_print(result['expression'])  # type: ignore[arg-type]
+                    res_blk = pretty_print(result['result'])  # type: ignore[arg-type]
+                    
+                    # ∫ f(x) dx
+                    left = hstack(Block.text("∫ "), expr_blk, Block.text(f" d{var}"))
+                    right = hstack(res_blk, Block.text(" + C"))
+                    
+                    final_blk = hstack(left, Block.text(" = "), right)
+                    
+                    _print_result([""] + ["  " + l for l in final_blk.lines] + [""])
                     _print_steps(result["notes"])
                 else:
                     _print_error(str(result.get("error")))
@@ -371,23 +387,28 @@ def interactive_cli() -> None:
                     except ValueError:
                         result = solve_definite_symbolic(raw, var, lower_str, upper_str)
                 if result.get("ok"):
-                    lines: list[str] = [
-                        f"∫[{lower_str}, {upper_str}] {format_expr(result['expression'])} d{var}",
-                        "",
-                    ]
+                    from integral_solver.core.printer import pretty_print, hstack, Block
+                    expr_blk = pretty_print(result['expression'])  # type: ignore[arg-type]
+                    
+                    lines: list[str] = [""]
+                    left = hstack(Block.text(f"∫[{lower_str}, {upper_str}] "), expr_blk, Block.text(f" d{var}"))
+                    lines.extend("  " + l for l in left.lines)
+                    lines.append("")
+                    
                     antideriv = result.get("antiderivative")
                     if antideriv is not None:
-                        # Show F(x), then F(b)-F(a) = value
-                        lines.append(f"Первообразная:  F({var}) = {format_expr(antideriv)}")
+                        res_blk = pretty_print(antideriv)
+                        f_blk = hstack(Block.text(f"F({var}) = "), res_blk)
+                        lines.extend("  " + l for l in f_blk.lines)
                         if "value" in result:
-                            lines.append(f"F({upper_str}) − F({lower_str})  =  {format_float(result['value'])}")
+                            lines.append(f"  F({upper_str}) − F({lower_str})  =  {format_float(result['value'])}")
                         else:
-                            lines.append(f"F({upper_str}) − F({lower_str})")
+                            lines.append(f"  F({upper_str}) − F({lower_str})")
                     elif "value" in result:
-                        # Numeric-only (no antiderivative found)
-                        lines.append(f"≈  {format_float(result['value'])}  (метод Симпсона)")
+                        lines.append(f"  ≈  {format_float(result['value'])}  (метод Симпсона)")
                     else:
-                        lines.append("(результат не вычислен)")
+                        lines.append("  (результат не вычислен)")
+                    lines.append("")
                     _print_result(lines)
                     _print_steps(result.get("notes", []))
                 else:

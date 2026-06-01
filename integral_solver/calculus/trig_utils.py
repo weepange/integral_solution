@@ -90,4 +90,39 @@ def integrate_sin_cos_powers(n: int, m: int, a: Fraction, var: str) -> Optional[
         ans = ans_u.substitute_expr("u", u_expr)
         return simplify(Mul((Const(Fraction(-1, a)), ans)))
 
+    # Both even: use reduction formulas
+    # sin^2(ax) = (1 - cos(2ax))/2
+    # cos^2(ax) = (1 + cos(2ax))/2
+    if n % 2 == 0 and m % 2 == 0:
+        from integral_solver.calculus.symbolic import integrate as sym_integrate
+        two_a = a * 2
+        
+        if n == 2 and m == 0:
+            # sin^2(ax) = 1/2 - cos(2ax)/2
+            half = Const(Fraction(1, 2))
+            cos2 = Func("cos", Mul((Const(two_a), Var(var))) if two_a != 1 else Var(var))
+            expr = Add((half, Mul((Const(Fraction(-1, 2)), cos2))))
+            result, _ = sym_integrate(expr, var)
+            return result
+        
+        if n == 0 and m == 2:
+            # cos^2(ax) = 1/2 + cos(2ax)/2
+            half = Const(Fraction(1, 2))
+            cos2 = Func("cos", Mul((Const(two_a), Var(var))) if two_a != 1 else Var(var))
+            expr = Add((half, Mul((Const(Fraction(1, 2)), cos2))))
+            result, _ = sym_integrate(expr, var)
+            return result
+        
+        # General even case: reduce using sin^2 = (1-cos2x)/2
+        if n >= 2:
+            # sin^n * cos^m = sin^(n-2) * cos^m * (1 - cos(2ax))/2
+            # Reduce n by 2
+            sub1 = integrate_sin_cos_powers(n - 2, m, a, var)
+            sub2 = integrate_sin_cos_powers(n - 2, m + 2, a, var)
+            if sub1 is not None and sub2 is not None:
+                return simplify(Add((
+                    Mul((Const(Fraction(1, 2)), sub1)),
+                    Mul((Const(Fraction(-1, 2)), sub2))
+                )))
+    
     return None

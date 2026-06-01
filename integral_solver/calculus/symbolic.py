@@ -38,11 +38,12 @@ def derivative(expr: Expr, var: str) -> Expr:
             terms.append(Mul(tuple(new_factors)))
         return simplify(Add(tuple(terms))) if terms else Const(Fraction(0))
     if isinstance(expr, Pow):
-        if isinstance(expr.base, Var) and expr.base.name == var and isinstance(expr.exponent, Const):
+        if isinstance(expr.exponent, Const):
             n = expr.exponent.value
-            return simplify(Mul((Const(n), Pow(expr.base, Const(n - 1)))))
-        if isinstance(expr.base, Const) and isinstance(expr.exponent, Const):
-            return Const(Fraction(0))
+            if n == 0:
+                return Const(Fraction(0))
+            base_der = derivative(expr.base, var)
+            return simplify(Mul((Const(n), Pow(expr.base, Const(n - 1)), base_der)))
         return Const(Fraction(0))
     if isinstance(expr, Func):
         arg_der = derivative(expr.arg, var)
@@ -144,7 +145,7 @@ def integrate_rational_function(num_coeffs: list[Fraction], den_coeffs: list[Fra
 
     return None, []
 
-def integrate(expr: Expr, var: str = "x") -> tuple[Optional[Expr], list[str]]:
+def integrate(expr: "Expr", var: str = "x") -> "tuple[Optional[Expr], list[str]]":
     expr = simplify(expr)
     notes: list[str] = []
 
@@ -172,7 +173,7 @@ def integrate(expr: Expr, var: str = "x") -> tuple[Optional[Expr], list[str]]:
 
     if isinstance(expr, Add):
         parts: list[Expr] = []
-        notes.append("Линейность ∫ : ∫(f+g)dx = ∫f dx + ∫g dx")
+        notes.append("Линейность ∫ : ∫(f+g)dx = ∫f dx + ∫g dx")
         for term in expr.terms:
             solved, subnotes = integrate(term, var)
             if solved is None:
@@ -189,17 +190,26 @@ def integrate(expr: Expr, var: str = "x") -> tuple[Optional[Expr], list[str]]:
         notes.append("Степенное правило: ∫x dx = x²/2")
         return simplify(Mul((Const(Fraction(1, 2)), Pow(Var(var), Const(Fraction(2)))))), notes
 
+    # Extract constant factor from Mul
     if isinstance(expr, Mul):
         indep, rest = extract_independent_factor(expr, var)
         if indep is not None:
             solved, subnotes = integrate(rest, var)
             if solved is not None:
-                notes.append("Линейность ∫ : ∫k·f dx = k·∫f dx")
+                notes.append("Линейность ∫ : ∫k·f dx = k·∫f dx")
                 notes.extend(subnotes)
                 if isinstance(indep, Const) and indep.value == 1:
                     return solved, notes
                 return simplify(Mul((indep, solved))), notes
 
+    # Try u-substitution BEFORE by-parts (gives simpler results)
+    if isinstance(expr, Mul) or isinstance(expr, Func) or isinstance(expr, Pow):
+        subst = integrate_by_substitution(expr, var)
+        if subst is not None:
+            return subst
+
+    # Integration by parts
+    if isinstance(expr, Mul):
         if len(expr.factors) == 2:
             left, right = expr.factors
             solved = integrate_linear_times_function(left, right, var)
@@ -219,7 +229,6 @@ def integrate(expr: Expr, var: str = "x") -> tuple[Optional[Expr], list[str]]:
     if isinstance(expr, Pow):
         solved = integrate_power(expr, var)
         if solved is not None:
-            # Detect whether linear substitution was needed
             lin = split_linear(expr.base, var) if not (isinstance(expr.base, Var) and expr.base.name == var) else None
             n = expr.exponent.value if isinstance(expr.exponent, Const) else None
             if lin and lin[0] != 0 and lin[0] != 1:
@@ -233,7 +242,6 @@ def integrate(expr: Expr, var: str = "x") -> tuple[Optional[Expr], list[str]]:
     if isinstance(expr, Func):
         solved = integrate_function(expr, var)
         if solved is not None:
-            # Detect linear substitution (a ≠ 1)
             lin = split_linear(expr.arg, var)
             if lin and lin[0] != 0 and lin[0] != 1:
                 notes.append(f"Подстановка u = {format_expr(expr.arg)}, затем табличный интеграл")
@@ -261,7 +269,7 @@ def integrate_power(expr: Pow, var: str) -> Optional[Expr]:
         if n == -1:
             return simplify(Mul((Const(Fraction(1, a)), Func("log", Func("abs", expr.base)))))
         if a != 0:
-            return simplify(Mul((Const(Fraction(1, a) / (n + 1))), Pow(expr.base, Const(n + 1))))
+            return simplify(Mul((Const(Fraction(1, a) / (n + 1)), Pow(expr.base, Const(n + 1)))))
     return None
 
 def integrate_function(expr: Func, var: str) -> Optional[Expr]:
@@ -326,15 +334,126 @@ def integrate_by_parts(expr: Mul, var: str) -> Optional[Expr]:
     if poly_part is None or func_part is None:
         return None
 
+    # Standard: u = poly, dv = func (works for x*sin(x), x*exp(x), etc.)
     du = derivative(poly_part, var)
     v = integrate(func_part, var)[0]
-    if v is None:
-        return None
-    remainder = simplify(Mul((v, du)))
-    inner = integrate(remainder, var)[0]
-    if inner is None:
-        return None
-    return simplify(Add((Mul((poly_part, v)), Mul((Const(Fraction(-1)), inner)))))
+    if v is not None:
+        remainder = simplify(Mul((v, du)))
+        inner = integrate(remainder, var)[0]
+        if inner is not None:
+            return simplify(Add((Mul((poly_part, v)), Mul((Const(Fraction(-1)), inner)))))
+
+    # Reverse: u = func, dv = poly (works for x*log(x), x*atan(x), etc.)
+    du2 = derivative(func_part, var)
+    v2 = integrate(poly_part, var)[0]
+    if v2 is not None:
+        remainder2 = simplify(Mul((v2, du2)))
+        inner2 = integrate(remainder2, var)[0]
+        if inner2 is not None:
+            return simplify(Add((Mul((func_part, v2)), Mul((Const(Fraction(-1)), inner2)))))
+
+
+def extract_subexpressions(expr: Expr, var: str) -> set[Expr]:
+    """Finds all non-trivial subexpressions that could be substitution candidates."""
+    candidates = set()
+    def visit(e: Expr):
+        if isinstance(e, Pow):
+            if e.base.contains_var(var) and not (isinstance(e.base, Var) and e.base.name == var):
+                candidates.add(e.base)
+            visit(e.base)
+            visit(e.exponent)
+        elif isinstance(e, Func):
+            if e.arg.contains_var(var) and not (isinstance(e.arg, Var) and e.arg.name == var):
+                candidates.add(e.arg)
+            visit(e.arg)
+        elif isinstance(e, Add):
+            for t in e.terms: visit(t)
+        elif isinstance(e, Mul):
+            for f in e.factors: visit(f)
+    visit(expr)
+    return candidates
+
+def divide_expr(expr: Expr, divisor: Expr) -> Optional[Expr]:
+    """Attempts to divide expr by divisor. Returns the quotient or None."""
+    expr = simplify(expr)
+    divisor = simplify(divisor)
+    if expr == divisor:
+        return Const(Fraction(1))
+    
+    # If divisor is Const*X, and expr contains X, we can cancel X
+    div_const = Fraction(1)
+    div_rest = divisor
+    if isinstance(divisor, Mul) and isinstance(divisor.factors[0], Const):
+        div_const = divisor.factors[0].value
+        if len(divisor.factors) == 2:
+            div_rest = divisor.factors[1]
+        else:
+            div_rest = Mul(divisor.factors[1:])
+            
+    if isinstance(divisor, Const):
+        div_const = divisor.value
+        div_rest = Const(Fraction(1))
+
+    # Match in Mul
+    if isinstance(expr, Mul):
+        factors = list(expr.factors)
+        # find div_rest
+        found = False
+        for i, f in enumerate(factors):
+            if f == div_rest:
+                factors.pop(i)
+                found = True
+                break
+        if found:
+            factors.insert(0, Const(Fraction(1, div_const)))
+            return simplify(Mul(tuple(factors)))
+            
+    if expr == div_rest:
+        return Const(Fraction(1, div_const))
+
+    return None
+
+def integrate_by_substitution(expr: Expr, var: str) -> Optional[tuple[Expr, list[str]]]:
+    candidates = extract_subexpressions(expr, var)
+    for g in candidates:
+        g_prime = derivative(g, var)
+        if isinstance(g_prime, Const) and g_prime.value == 0:
+            continue
+            
+        quotient = divide_expr(expr, g_prime)
+        if quotient is not None:
+            # We successfully separated f(g(x)) * g'(x)
+            # Now we need to express quotient entirely in terms of u = g(x)
+            # We can do this by substituting g(x) with a temporary variable 'u'
+            # For a simple implementation, we just replace instances of `g` in `quotient` with `Var('u')`.
+            
+            def replace_g(e: Expr) -> Expr:
+                if e == g:
+                    return Var('u')
+                if isinstance(e, Add):
+                    return Add(tuple(replace_g(t) for t in e.terms))
+                if isinstance(e, Mul):
+                    return Mul(tuple(replace_g(f) for f in e.factors))
+                if isinstance(e, Pow):
+                    return Pow(replace_g(e.base), replace_g(e.exponent))
+                if isinstance(e, Func):
+                    return Func(e.name, replace_g(e.arg))
+                return e
+                
+            f_u = simplify(replace_g(quotient))
+            if f_u.contains_var(var):
+                # substitution failed to eliminate var
+                continue
+                
+            # integrate f_u w.r.t 'u'
+            F_u, notes = integrate(f_u, 'u')
+            if F_u is not None:
+                # substitute back u = g(x)
+                F_x = simplify(F_u.substitute_expr('u', g))
+                from integral_solver.core.ast import format_expr
+                return F_x, [f"Замена переменной: u = {format_expr(g)}, du = {format_expr(g_prime)} dx"] + notes
+                
+    return None
 
 def integrate_polynomial(expr: Expr, var: str) -> tuple[Optional[Expr], list[str]]:
     expr = simplify(expr)

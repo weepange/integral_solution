@@ -80,14 +80,20 @@ class Add(Expr):
     def simplify(self) -> Expr:
         terms: list[Expr] = []
         const = Fraction(0)
-        for term in self.terms:
-            term = simplify(term)
-            if isinstance(term, Const):
-                const += term.value
-            elif isinstance(term, Add):
-                terms.extend(term.terms)
+        
+        def add_term(t: Expr):
+            nonlocal const
+            if isinstance(t, Const):
+                const += t.value
+            elif isinstance(t, Add):
+                for sub in t.terms:
+                    add_term(sub)
             else:
-                terms.append(term)
+                terms.append(t)
+
+        for term in self.terms:
+            add_term(simplify(term))
+            
         if const:
             terms.append(Const(const))
         if not terms:
@@ -112,14 +118,20 @@ class Mul(Expr):
     def simplify(self) -> Expr:
         factors: list[Expr] = []
         const = Fraction(1)
-        for factor in self.factors:
-            factor = simplify(factor)
-            if isinstance(factor, Const):
-                const *= factor.value
-            elif isinstance(factor, Mul):
-                factors.extend(factor.factors)
+        
+        def add_factor(f: Expr):
+            nonlocal const
+            if isinstance(f, Const):
+                const *= f.value
+            elif isinstance(f, Mul):
+                for sub in f.factors:
+                    add_factor(sub)
             else:
-                factors.append(factor)
+                factors.append(f)
+
+        for factor in self.factors:
+            add_factor(simplify(factor))
+            
         if const == 0:
             return Const(Fraction(0))
         if const != 1 or not factors:
@@ -153,6 +165,14 @@ class Pow(Expr):
                 return Const(Fraction(1))
             if exponent.value == 1:
                 return base
+        # sqrt(x)^n → x^(n/2)
+        if isinstance(base, Func) and base.name == "sqrt" and isinstance(exponent, Const):
+            new_exp = exponent.value * Fraction(1, 2)
+            return simplify(Pow(base.arg, Const(new_exp)))
+        # (x^a)^b → x^(a*b)
+        if isinstance(base, Pow) and isinstance(base.exponent, Const) and isinstance(exponent, Const):
+            new_exp = base.exponent.value * exponent.value
+            return simplify(Pow(base.base, Const(new_exp)))
         if isinstance(base, Const) and isinstance(exponent, Const):
             if exponent.value.denominator == 1:
                 return Const(base.value ** exponent.value.numerator)
@@ -174,7 +194,38 @@ class Func(Expr):
     arg: Expr
 
     def simplify(self) -> Expr:
-        return Func(self.name, simplify(self.arg))
+        arg = simplify(self.arg)
+        if self.name == "sqrt" and isinstance(arg, Const) and arg.value >= 0:
+            # Check for perfect square first
+            if arg.value == 1:
+                return Const(Fraction(1))
+            if arg.value == 0:
+                return Const(Fraction(0))
+            import math
+            n = arg.value.numerator
+            d = arg.value.denominator
+            
+            def extract_square(val: int) -> tuple[int, int]:
+                a = 1
+                b = val
+                if val == 0:
+                    return 0, 1
+                for i in range(2, int(math.sqrt(val)) + 1):
+                    while b % (i * i) == 0:
+                        a *= i
+                        b //= (i * i)
+                return a, b
+            
+            a_n, b_n = extract_square(n)
+            a_d, b_d = extract_square(d)
+            
+            coef = Fraction(a_n, a_d)
+            rem = Fraction(b_n, b_d)
+            if rem == 1:
+                return Const(coef)
+            if coef != 1:
+                return simplify(Mul((Const(coef), Func("sqrt", Const(rem)))))
+        return Func(self.name, arg)
 
     def contains_var(self, name: str) -> bool:
         return self.arg.contains_var(name)
@@ -225,17 +276,35 @@ def format_expr_internal(expr: Expr, parent_prec: int) -> str:
         return expr.name
     if isinstance(expr, Add):
         parts = []
-        for term in expr.terms:
-            text = format_expr_internal(term, 1)
-            parts.append(text)
-        text = " + ".join(parts)
+        for i, term in enumerate(expr.terms):
+            if i > 0:
+                # Check for negative term
+                if isinstance(term, Mul) and term.factors and isinstance(term.factors[0], Const) and term.factors[0].value < 0:
+                    neg_term = simplify(Mul((Const(Fraction(-1)), term)))
+                    parts.append(" - " + format_expr_internal(neg_term, 1))
+                elif isinstance(term, Const) and term.value < 0:
+                    parts.append(" - " + format_num(-term.value))
+                else:
+                    parts.append(" + " + format_expr_internal(term, 1))
+            else:
+                parts.append(format_expr_internal(term, 1))
+        text = "".join(parts)
         return f"({text})" if parent_prec > 1 else text
     if isinstance(expr, Mul):
+        factors = list(expr.factors)
+        prefix = ""
+        # Handle -1 coefficient
+        if factors and isinstance(factors[0], Const) and factors[0].value == -1 and len(factors) > 1:
+            prefix = "-"
+            factors = factors[1:]
+        # Handle 1 coefficient
+        elif factors and isinstance(factors[0], Const) and factors[0].value == 1 and len(factors) > 1:
+            factors = factors[1:]
         parts = []
-        for factor in expr.factors:
+        for factor in factors:
             text = format_expr_internal(factor, 2)
             parts.append(text)
-        text = "*".join(parts)
+        text = prefix + "*".join(parts)
         return f"({text})" if parent_prec > 2 else text
     if isinstance(expr, Pow):
         text = f"{format_expr_internal(expr.base, 3)}^({format_expr_internal(expr.exponent, 3)})"
@@ -243,6 +312,8 @@ def format_expr_internal(expr: Expr, parent_prec: int) -> str:
     if isinstance(expr, Func):
         if expr.name == "abs":
             return f"|{format_expr_internal(expr.arg, 0)}|"
+        if expr.name == "log":
+            return f"ln({format_expr_internal(expr.arg, 0)})"
         return f"{expr.name}({format_expr_internal(expr.arg, 0)})"
     return str(expr)
 
