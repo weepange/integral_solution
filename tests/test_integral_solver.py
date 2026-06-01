@@ -78,9 +78,40 @@ class IntegralSolverTests(unittest.TestCase):
         self.assertAlmostEqual(float(result["value"]), 0.746824, places=4)
         self.assertTrue(any("Симпсона" in note for note in result["notes"]))
 
+    def test_invalid_syntax(self) -> None:
+        try:
+            solve_indefinite("x + + * 2")
+            self.fail("Expected an exception for invalid syntax")
+        except Exception:
+            pass
+
+    def test_unsupported_function(self) -> None:
+        try:
+            solve_indefinite("unknown_func(x)")
+            self.fail("Expected an exception for unsupported function")
+        except Exception:
+            pass
+
+    def test_division_by_zero_polynomial(self) -> None:
+        try:
+            solve_indefinite("(x^2 + 1) / (x - x)")
+            self.fail("Expected an exception for division by zero polynomial")
+        except Exception:
+            pass
+
+    def test_trig_powers(self) -> None:
+        result = solve_indefinite("sin(x)^3 * cos(x)^2")
+        self.assertTrue(result.get("ok", False))
+        text = explain_solution(result)
+        self.assertIn("cos(x)^(3)", text)
+        self.assertIn("cos(x)^(5)", text)
+
+    def test_complex_rational_function(self) -> None:
+        result = solve_indefinite("(4*x^2 + 5*x + 1)/(x^3 - 1)")
+        self.assertTrue(result.get("ok", False))
+        text = explain_solution(result)
+        self.assertIn("log", text)
+        self.assertIn("atan", text)
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
